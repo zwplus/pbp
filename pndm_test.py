@@ -281,14 +281,14 @@ class People_Background(pl.LightningModule):
             
             self.fid.update(target_img,real=False)
             self.fid.update(img,real=True)
-            self.log('fid',self.fid,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+            self.log('test_fid',self.fid,prog_bar=True,logger=True,on_step=True,on_epoch=True)
 
             self.lpips.update(target_img,img)
-            self.log('lpips',self.lpips,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+            self.log('test_lpips',self.lpips,prog_bar=True,logger=True,on_step=True,on_epoch=True)
             self.psnr.update(target_img,img)
-            self.log('psnr',self.psnr,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+            self.log('test_psnr',self.psnr,prog_bar=True,logger=True,on_step=True,on_epoch=True)
             self.ssim.update(target_img,img)
-            self.log('ssim',self.ssim,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+            self.log('test_ssim',self.ssim,prog_bar=True,logger=True,on_step=True,on_epoch=True)
 
             img=img.detach().cpu()
             pose_img=pose_img.detach().cpu()
@@ -311,7 +311,7 @@ class People_Background(pl.LightningModule):
                     h=torch.cat([img[:4],pose_img[:4],target_img[:4]])
                     show_img=make_grid(h,nrow=4,padding=1)
                     show_img=torch.unsqueeze(show_img,dim=0)
-                    logger.experiment.add_images('val/img',show_img,self.global_step)
+                    logger.experiment.add_images('test/img',show_img,self.global_step)
 
 
     def get_people_condition(self,people_img,part_img):
