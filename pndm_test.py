@@ -1,24 +1,29 @@
 import sys
 import os
 from typing import Any, Dict,List,Optional
+import random
+from tqdm import tqdm
+
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from torchvision.utils import make_grid
 import torch
 import torch.nn as nn
-import random
-from tqdm import tqdm
+from einops import rearrange
+from torchvision import transforms
+
 from pytorch_lightning.loggers import TensorBoardLogger
 from torchmetrics.image.fid import FrechetInceptionDistance
-from diffusers import AutoencoderKL,PNDMScheduler,DDIMScheduler
-from einops import rearrange
+from diffusers import AutoencoderKL,PNDMScheduler,DDIMScheduler,DDPMScheduler
 from pytorch_lightning import seed_everything
+from torchmetrics.image import PeakSignalNoiseRatio as PSNR
+from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPIPS
+from pytorch_lightning.strategies.ddp import DDPStrategy
+
 from unet_2d_condition import UNet2DConditionModel as unet
 from style_encoder import CLIP_Image_Extractor,CLIP_Proj,people_global_fusion,people_local_fusion
-from torchvision import transforms
-from contextlib import contextmanager
-from pytorch_lightning.strategies.ddp import DDPStrategy
 from diffusers.utils.import_utils import is_xformers_available
 from tiktok_dataset_2 import diffusion_dataset
 from control_net import ControlNetModel
@@ -112,6 +117,9 @@ class People_Background(pl.LightningModule):
         print(f'There are {need_train} modules in unet to be set as requires_grad=True.')
 
         self.fid=FrechetInceptionDistance(normalize=True)
+        self.lpips=LPIPS(net_type='vgg',normalize=True)
+        self.ssim=SSIM(data_range=1.0)
+        self.psnr=PSNR(data_range=1.0)
 
         if enable_xformers_memory_efficient_attention:
             if is_xformers_available():
@@ -223,6 +231,13 @@ class People_Background(pl.LightningModule):
             self.fid.update(img,real=True)
             self.log('fid',self.fid,prog_bar=True,logger=True,on_step=True,on_epoch=True)
 
+            self.lpips.update(target_img,img)
+            self.log('lpips',self.lpips,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+            self.psnr.update(target_img,img)
+            self.log('psnr',self.psnr,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+            self.ssim.update(target_img,img)
+            self.log('ssim',self.ssim,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+
             img=img.detach().cpu()
             pose_img=pose_img.detach().cpu()
             target_img=target_img.detach().cpu()
@@ -245,6 +260,59 @@ class People_Background(pl.LightningModule):
                     show_img=make_grid(h,nrow=4,padding=1)
                     show_img=torch.unsqueeze(show_img,dim=0)
                     logger.experiment.add_images('val/img',show_img,self.global_step)
+    @torch.no_grad()
+    def test_step(self,batch,batch_idx):
+        rate=random.random()
+
+        background_img,part_img,people_img,pose_img,img=batch
+        img=img.to(self.device)
+        people_img=people_img.to(self.device)
+        part_img=part_img.to(self.device)
+        background_img=background_img.to(self.device)
+        pose_img=pose_img.to(self.device)
+        
+        if rate<1:
+            target_img=self.sample(people_img,part_img,background_img,pose_img)
+            target_img=self.laten_to_img(target_img)
+            target_img=torch.clamp(target_img.detach()/2+0.5,0,1).detach()
+            img=img.detach()/2+0.5
+            pose_img=pose_img.detach().cpu()/2+0.5
+            
+            
+            self.fid.update(target_img,real=False)
+            self.fid.update(img,real=True)
+            self.log('fid',self.fid,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+
+            self.lpips.update(target_img,img)
+            self.log('lpips',self.lpips,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+            self.psnr.update(target_img,img)
+            self.log('psnr',self.psnr,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+            self.ssim.update(target_img,img)
+            self.log('ssim',self.ssim,prog_bar=True,logger=True,on_step=True,on_epoch=True)
+
+            img=img.detach().cpu()
+            pose_img=pose_img.detach().cpu()
+            target_img=target_img.detach().cpu()
+            # part_img=part_img.detach().cpu()
+
+
+
+            file_dir=os.path.join(self.out_path,str(self.global_step))
+            os.makedirs(file_dir,exist_ok=True)
+            for i in range(target_img.shape[0]):
+                save_img=self.tr(target_img[i])
+                save_img.save(os.path.join(file_dir,str(self.save_img_num)+'.jpg'))
+                self.save_img_num+=1
+                if self.save_img_num==1:
+                    # n_img=part_img[:4]/2+0.5
+                    # n_img=rearrange(n_img,'b (l c) h w -> (b l) c h w',l=8).contiguous()
+                    # n_img=torch.stack([torch.sum(n_img[i:i+8],dim=0) for i in range(0,n_img.shape[0],8)])
+
+                    h=torch.cat([img[:4],pose_img[:4],target_img[:4]])
+                    show_img=make_grid(h,nrow=4,padding=1)
+                    show_img=torch.unsqueeze(show_img,dim=0)
+                    logger.experiment.add_images('val/img',show_img,self.global_step)
+
 
     def get_people_condition(self,people_img,part_img):
         part_img=rearrange(part_img,'b (l c) h w -> (b l) c h w',c=3).contiguous()
