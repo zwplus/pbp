@@ -14,10 +14,11 @@ class CLIP_Image_Extractor(nn.Module):
         self.clip_image_encoder.requires_grad_(False)
 
     def clip_encode_image_local(self, image): # clip local feature
-        last_hidden_states = self.clip_image_encoder(image).last_hidden_state
+        last_hidden_states = self.clip_image_encoder(image)
         last_hidden_states_norm = self.clip_image_encoder.vision_model.post_layernorm(last_hidden_states)
-
-        return last_hidden_states_norm
+        image_embedding=last_hidden_states_norm[:,0,:]
+        
+        return last_hidden_states_norm,image_embedding
     def forward(self,image):
         return self.clip_encode_image_local(image)
 
@@ -34,6 +35,62 @@ class CLIP_Proj(nn.Module):
         image_embeddings = image_embeddings.repeat(1, num_images_per_prompt, 1)
         image_embeddings = image_embeddings.view(bs_embed * num_images_per_prompt, seq_len, -1)
         return image_embeddings     
+
+
+class FeedFoward(nn.Module):
+    def __init__(self,in_channels:int=768,mult:int=2 ) -> None:
+        super().__init__()
+        self.proj_in=nn.Linear(in_channels,in_channels*2)
+        self.act_fn=nn.GELU()
+        self.proj_out=nn.Linear(in_channels*mult,)
+
+
+class clip_transformer_block(nn.Module):
+    def __init__(self,inchannels:int=768,mult=2,heads_num=8,head_dim=96,cross_dim:int=None,**kwargs) -> None:
+        super().__init__()
+        cross_dim=inchannels if cross_dim is None else cross_dim
+        inner_dim=heads_num*heads_num
+        self.norm_in=nn.LayerNorm(inchannels)
+        self.proj_in=nn.Linear(inchannels,inner_dim)
+
+        self.norm_1=nn.LayerNorm(inner_dim)
+        self.attn1=xformers_LinearCrossAttention(inner_dim,heads=heads_num,dim_head=head_dim)
+
+        self.norm_2=nn.LayerNorm(inner_dim)
+        self.attn2=xformers_LinearCrossAttention(query_dim=inner_dim,context_dim=cross_dim,heads=heads_num,dim_head=head_dim)
+        
+        self.norm_3=nn.LayerNorm(inner_dim)
+        self.feedforward=FeedFoward(inner_dim,mult=mult)
+
+        self.norm_out=nn.LayerNorm(inner_dim)
+        self.proj_out=nn.Linear(inner_dim,inchannels)
+    
+    def forward(self,part_feature:torch.FloatTensor,full_feature:torch.FloatTensor=None):
+        
+        part_feature=self.norm_in(part_feature)
+        part_feature=self.proj_in(part_feature)
+
+        part_feature=self.norm_1(part_feature)
+        residual=part_feature
+        part_feature=self.attn1(part_feature)
+        part_feature+=residual
+
+        part_feature=self.norm_2(part_feature)
+        residual=part_feature
+        full_feature=part_feature if full_feature is None else full_feature
+        part_feature=self.attn2(part_feature,full_feature)
+        part_feature+=residual
+
+        part_feature=self.norm_3(part_feature)
+        part_feature=self.feedforward(part_feature)
+
+        part_feature=self.norm_out(part_feature)
+        part_feature=self.proj_out(part_feature)
+
+        return part_feature
+
+
+
 
 class people_global_fusion(nn.Module):
     def __init__(self,inchannels=512,ch=768,local_num=8,heads=8) -> None:
@@ -56,7 +113,7 @@ class people_global_fusion(nn.Module):
         return h+x
 
 class people_local_fusion(nn.Module):
-    def __init__(self,inchannels=768,mult=2,local_num=8,heads=8,head_dim=128,eps=1e-5) -> None:
+    def __init__(self,inchannels=768,mult=2,local_num=8,heads_num=8,head_dim=128,eps=1e-5,**kwargs) -> None:
         super().__init__()
 
         self.inchannels=inchannels
@@ -66,11 +123,11 @@ class people_local_fusion(nn.Module):
         self.silu=nn.SiLU()
         self.conv=nn.Conv2d(self.inchannels,self.inchannels,5,1,2)
 
-        inner_dim=head_dim*heads
+        inner_dim=head_dim*heads_num
         self.proj_in=nn.Linear(self.inchannels,inner_dim)
 
-        self.attn1=xformers_LinearCrossAttention(inner_dim,heads=heads,dim_head=head_dim)    
-        self.attn2=xformers_LinearCrossAttention(inner_dim,heads=heads,dim_head=head_dim)   
+        self.attn1=xformers_LinearCrossAttention(inner_dim,heads=heads_num,dim_head=head_dim)    
+        self.attn2=xformers_LinearCrossAttention(inner_dim,heads=heads_num,dim_head=head_dim)   
         self.feedfoward=nn.Sequential(
             nn.Linear(inner_dim,inner_dim*mult),
             nn.GELU(),
