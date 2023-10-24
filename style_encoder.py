@@ -14,10 +14,9 @@ class CLIP_Image_Extractor(nn.Module):
         self.clip_image_encoder.requires_grad_(False)
 
     def clip_encode_image_local(self, image): # clip local feature
-        last_hidden_states = self.clip_image_encoder(image)
+        last_hidden_states = self.clip_image_encoder(image).last_hidden_state
         last_hidden_states_norm = self.clip_image_encoder.vision_model.post_layernorm(last_hidden_states)
         image_embedding=last_hidden_states_norm[:,0,:]
-        
         return last_hidden_states_norm,image_embedding
     def forward(self,image):
         return self.clip_encode_image_local(image)
@@ -42,14 +41,20 @@ class FeedFoward(nn.Module):
         super().__init__()
         self.proj_in=nn.Linear(in_channels,in_channels*2)
         self.act_fn=nn.GELU()
-        self.proj_out=nn.Linear(in_channels*mult,)
+        self.proj_out=nn.Linear(in_channels*mult,in_channels)
+    def forward(self,x):
+        x=self.proj_in(x)
+        x=self.act_fn(x)
+        x=self.proj_out(x)
+        return x
 
 
 class clip_transformer_block(nn.Module):
     def __init__(self,inchannels:int=768,mult=2,heads_num=8,head_dim=96,cross_dim:int=None,**kwargs) -> None:
         super().__init__()
         cross_dim=inchannels if cross_dim is None else cross_dim
-        inner_dim=heads_num*heads_num
+        inner_dim=heads_num*head_dim
+
         self.norm_in=nn.LayerNorm(inchannels)
         self.proj_in=nn.Linear(inchannels,inner_dim)
 
@@ -77,7 +82,6 @@ class clip_transformer_block(nn.Module):
 
         part_feature=self.norm_2(part_feature)
         residual=part_feature
-        full_feature=part_feature if full_feature is None else full_feature
         part_feature=self.attn2(part_feature,full_feature)
         part_feature+=residual
 

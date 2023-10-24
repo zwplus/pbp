@@ -33,10 +33,10 @@ from style_encoder import (
      clip_transformer_block
 )
 
-from tiktok_dataset_2 import diffusion_dataset
+from tiktok_dataset import diffusion_dataset
 from control_net import ControlNetModel
 
-seed_everything(24)
+seed_everything(1024)
 
 class People_Background(pl.LightningModule):
     def __init__(self,
@@ -48,6 +48,8 @@ class People_Background(pl.LightningModule):
                 image_size=(4,32,32),condition_rate=0.1,condition_guidance=3,
                 warm_up=6000,learning_rate=1e-4,local_num=8,enable_xformers_memory_efficient_attention=True):
         super().__init__()
+
+        self.save_hyperparameters()
 
         self.train_stage=train_stage
         self.train_scheduler=DDPMScheduler()
@@ -85,8 +87,7 @@ class People_Background(pl.LightningModule):
         self.people_proj_part=CLIP_Proj(**people_config['clip_proj'])
         self.people_global_fusion=clip_transformer_block(**people_config['global_fusion'])
         self.people_local_fusion=clip_transformer_block(**people_config['local_fusion'])
-        # self.people_global_fusion=people_global_fusion(**people_config['global_fusion'])
-        # self.people_local_fusion=people_local_fusion(**people_config['local_fusion'])
+ 
 
         
         #初始化background_config
@@ -128,28 +129,28 @@ class People_Background(pl.LightningModule):
         rate=random.random()
 
         background_img,part_img,people_img,pose_img,img=batch
-        img=img.to(self.device)
-        people_img=people_img.to(self.device)
-        part_img=part_img.to(self.device)
-        background_img=background_img.to(self.device)
-        pose_img=pose_img.to(self.device)
+        img=img.to(self.dtype).to(self.device)
+        people_img=people_img.to(self.dtype).to(self.device)
+        part_img=part_img.to(self.dtype).to(self.device)
+        background_img=background_img.to(self.dtype).to(self.device)
+        pose_img=pose_img.to(self.dtype).to(self.device)
             
 
         if rate <= self.condition_rate:
             people_feature=self.get_people_condition(
-                torch.zeros_like(people_img).to(self.device),
-                torch.zeros_like(part_img).to(self.device))
-            back_feature=self.get_back_feature(torch.zeros_like(background_img).to(self.device))
+                torch.zeros_like(people_img).to(self.dtype).to(self.device),
+                torch.zeros_like(part_img).to(self.dtype).to(self.device))
+            back_feature=self.get_back_feature(torch.zeros_like(background_img).to(self.dtype).to(self.device))
         else:
             people_feature=self.get_people_condition(people_img,part_img)
             back_feature=self.get_back_feature(background_img)
         
         target=self.img_to_laten(img).detach()
-        noise=torch.randn(target.shape).to(self.device)
+        noise=torch.randn(target.shape,dtype=self.dtype).to(self.device)
         timesteps=torch.randint(0,self.train_scheduler.config.num_train_timesteps,(target.shape[0],)).long().to(self.device)
-        noisy_image=self.train_scheduler.add_noise(target,noise,timesteps)
+        noisy_image=self.train_scheduler.add_noise(target,noise,timesteps).half()
         
-
+        
         model_out = self(noisy_image, timesteps,people_feature,back_feature,pose_img)
 
         loss=F.mse_loss(model_out,noise)
@@ -181,20 +182,20 @@ class People_Background(pl.LightningModule):
     def sample(self,people_img:torch.FloatTensor,part_img:torch.FloatTensor,
                 background_img:Optional[torch.FloatTensor]=None,pose_img:torch.FloatTensor=None):
 
-            latens_=torch.randn([people_img.shape[0],*self.laten_shape]).to(self.device)
+            latens_=torch.randn([people_img.shape[0],*self.laten_shape],dtype=self.dtype).to(self.device)
 
-            uncond_people_feature=self.get_people_condition(torch.zeros_like(people_img).to(self.device),
-                                                            torch.zeros_like(part_img).to(self.device))
+            uncond_people_feature=self.get_people_condition(torch.zeros_like(people_img).to(self.dtype).to(self.device),
+                                                            torch.zeros_like(part_img).to(self.dtype).to(self.device))
             cond_people_feature=self.get_people_condition(people_img,part_img)
             people_feature=torch.cat([cond_people_feature,uncond_people_feature])
 
-            uncond_back_feature=self.get_back_feature(torch.zeros_like(background_img).to(self.device))
+            uncond_back_feature=self.get_back_feature(torch.zeros_like(background_img).to(self.dtype).to(self.device))
             cond_back_feature=self.get_back_feature(background_img).detach()
             back_feature=torch.cat([cond_back_feature,uncond_back_feature])
             
             pose_img=torch.cat([pose_img,pose_img])
 
-            for t in tqdm(self.val_scheduler.timesteps):
+            for t in self.val_scheduler.timesteps:
                 latens=torch.cat([latens_]*2)
                 timestep=torch.full((latens.shape[0],),t).to(self.device)
                 noise_pred=self(latens,timestep,people_feature,back_feature,pose_img)
@@ -205,23 +206,22 @@ class People_Background(pl.LightningModule):
 
     @torch.no_grad()
     def validation_step(self,batch,batch_idx):
-        rate=random.random()
 
         background_img,part_img,people_img,pose_img,img=batch
-        img=img.to(self.device)
-        people_img=people_img.to(self.device)
-        part_img=part_img.to(self.device)
-        background_img=background_img.to(self.device)
-        pose_img=pose_img.to(self.device)
+        img=img.to(self.dtype).to(self.device)
+        people_img=people_img.to(self.dtype).to(self.device)
+        part_img=part_img.to(self.dtype).to(self.device)
+        background_img=background_img.to(self.dtype).to(self.device)
+        pose_img=pose_img.to(self.dtype).to(self.device)
         
         
         target_img=self.sample(people_img,part_img,background_img,pose_img)
         target_img=self.laten_to_img(target_img)
         target_img=torch.clamp(target_img.detach()/2+0.5,0,1).detach()
-        img=img.detach()/2+0.5
+        img=(img.detach()/2+0.5).to(self.dtype)
         pose_img=pose_img.detach().cpu()/2+0.5
             
-            
+
         self.fid.update(target_img,real=False)
         self.fid.update(img,real=True)
         self.log('fid',self.fid,prog_bar=True,logger=True,on_step=True,on_epoch=True)
@@ -244,7 +244,7 @@ class People_Background(pl.LightningModule):
         os.makedirs(file_dir,exist_ok=True)
         for i in range(target_img.shape[0]):
             save_img=self.tr(target_img[i])
-            save_img.save(os.path.join(file_dir,str(self.save_img_num)+'.jpg'))
+            save_img.save(os.path.join(file_dir,str(self.local_rank)+'_'+str(self.save_img_num)+'.jpg'))
             self.save_img_num+=1
             if self.save_img_num==1:  
                 h=torch.cat([img[:4],pose_img[:4],target_img[:4]])
@@ -255,10 +255,9 @@ class People_Background(pl.LightningModule):
     def get_people_condition(self,people_img,part_img):
         part_img=rearrange(part_img,'b (l c) h w -> (b l) c h w',c=3).contiguous()
         # part_laten=self.laten_model.encoder.get_feature(part_img).detach()
-        part_laten=self.clip(part_img)[1].deatch()
+        part_laten=self.clip(part_img)[1].detach().unsqueeze(dim=1)
         part_laten=self.people_proj_part(part_laten)
-        part_laten=rearrange(part_img,'(b l) n d -> b (l*n) d',l=self.local_num)
-
+        part_laten=rearrange(part_laten,'(b l) n d -> b (l n) d',l=self.local_num)
         people_global_feature=self.clip(people_img)[0].detach()
         people_global_feature=self.people_proj(people_global_feature)
 
@@ -300,10 +299,10 @@ class People_Background(pl.LightningModule):
 
 
 train_list=[
-    '/root/data1/github/pbp/train_pairs_1.txt'
+    '/root/data2/user/zhangwei/Data/Human_Attribute_Pretrain/TikTokDance/train/titok_pairs.txt',
 ]
 test_list=[
-    '/root/data1/github/pbp/test_pairs_1.txt'
+   '/root/data2/user/zhangwei/Data/Human_Attribute_Pretrain/TikTokDance/test/titok_pairs.txt'
 ]
 
 
@@ -311,10 +310,10 @@ test_list=[
 if __name__=='__main__':
     logger=TensorBoardLogger(save_dir='/root/data1/github/pbp/log/')
     train_dataset=diffusion_dataset(train_list,if_train=True)
-    test_dataset=diffusion_dataset(test_list,if_train=True)
+    test_dataset=diffusion_dataset(test_list,if_train=False)
 
-    train_loader=DataLoader(train_dataset,batch_size=6,shuffle=True,pin_memory=True,num_workers=8)
-    val_loader=DataLoader(test_dataset,batch_size=6,pin_memory=True,num_workers=8,drop_last=True)
+    train_loader=DataLoader(train_dataset,batch_size=12,shuffle=True,pin_memory=True,num_workers=12)
+    val_loader=DataLoader(test_dataset,batch_size=12,pin_memory=True,num_workers=12,drop_last=True,shuffle=False)
     
     unet_config={
         'ck_path':'/root/data1/github/pbp/sd-image-variations-diffusers/dual_unet/',
@@ -330,9 +329,8 @@ if __name__=='__main__':
             'ck_path':'/root/data1/github/pbp/sd-image-variations-diffusers/raw_proj/pro_j.ckpt'
         },
         'global_fusion':{
-            'inchannels':768,   #512
+            'inchannels':768,   
             'mult':2,
-            'local_num':8,
             'heads_num':8,
             'head_dim':96,
             'cross_dim':768
@@ -340,24 +338,10 @@ if __name__=='__main__':
         'local_fusion':{
             'inchannels':768,
             'mult':2,
-            'local_num':8,
             'heads_num':8,
             'head_dim':96,
             'cross_dim':768
         }
-        # 'global_fusion':{
-        #     'inchannels':512,
-        #     'ch':768,
-        #     'local_num':8,
-        #     'heads':8,
-        # },
-        # 'local_fusion':{
-        #     'inchannels':768,
-        #     'mult':2,
-        #     'local_num':8,
-        #     'heads':8,
-        #     'head_dim':128,
-        # }
     }
 
     background_config={
@@ -373,7 +357,7 @@ if __name__=='__main__':
 
     model=People_Background(unet_config,people_config,background_config,vae_path=vae_path,
                             train_stage='train',out_path='/root/data1/github/pbp/ouput',
-                            warm_up=8000,learning_rate=1e-4)
+                            warm_up=8000,learning_rate=2e-4)
 
 
     checkpoint_callback = pl.callbacks.ModelCheckpoint(dirpath="/root/data1/github/pbp/checkpoint", save_top_k=5, monitor="fid",mode='min',filename="pndm-{epoch:03d}-{fid:.3f}")
@@ -382,8 +366,9 @@ if __name__=='__main__':
         logger=logger,callbacks=[checkpoint_callback],default_root_dir='/root/data1/github/pbp/checkpoint',
         strategy='deepspeed_stage_2',precision='16-mixed',
         accelerator='gpu',devices=4,
-        accumulate_grad_batches=8,check_val_every_n_epoch=4,
+        accumulate_grad_batches=8,check_val_every_n_epoch=5,
         log_every_n_steps=1000,max_epochs=200,
         profiler='simple',benchmark=True,gradient_clip_val=1) 
     
-    trainer.fit(model,train_loader,val_loader,ckpt_path='') 
+    trainer.fit(model,train_loader,val_loader) 
+
