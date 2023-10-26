@@ -26,9 +26,11 @@ from diffusers.models.modeling_utils import ModelMixin
 from unet_2d_blocks import (
     CrossAttnDownBlock2D,
     Dual_CrossAttnDownBlock2D,
+    DTB_CrossAttnDownBlock2D,
     DownBlock2D,
     UNetMidBlock2DCrossAttn,
     Dual_UNetMidBlock2DCrossAttn,
+    DTB_UNetMidBlock2DCrossAttn,
     get_down_block,
 )
 from diffusers.models.unet_2d_condition import UNet2DConditionModel
@@ -99,9 +101,9 @@ class ControlNetModel(ModelMixin, ConfigMixin):
         flip_sin_to_cos: bool = True,
         freq_shift: int = 0,
         down_block_types: Tuple[str] = (    #要和UNet的下采样部分保持一致
-            "Dual_CrossAttnDownBlock2D",
-            "Dual_CrossAttnDownBlock2D",
-            "Dual_CrossAttnDownBlock2D",
+            "DTB_CrossAttnDownBlock2D",
+            "DTB_CrossAttnDownBlock2D",
+            "DTB_CrossAttnDownBlock2D",
             "DownBlock2D",
         ),
         only_cross_attention: Union[bool, Tuple[bool]] = False,
@@ -213,7 +215,7 @@ class ControlNetModel(ModelMixin, ConfigMixin):
         #参照UNet下采样部分创建UNet
 
         for i, down_block_type in enumerate(down_block_types):
- 
+
             input_channel = output_channel
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
@@ -271,20 +273,33 @@ class ControlNetModel(ModelMixin, ConfigMixin):
                     upcast_attention=upcast_attention,
                 )
         else:
-            self.mid_block = Dual_UNetMidBlock2DCrossAttn(
-                    in_channels=mid_block_channel,
-                    temb_channels=time_embed_dim,
-                    resnet_eps=norm_eps,
-                    resnet_act_fn=act_fn,
-                    output_scale_factor=mid_block_scale_factor,
-                    resnet_time_scale_shift=resnet_time_scale_shift,
-                    cross_attention_dim=cross_attention_dim,
-                    num_attention_heads=attention_head_dim[-1],
-                    resnet_groups=norm_num_groups,
-                    use_linear_projection=use_linear_projection,
-                    upcast_attention=upcast_attention,
-                    back_attention=back_attention
-                )
+            # self.mid_block = Dual_UNetMidBlock2DCrossAttn(
+            #         in_channels=mid_block_channel,
+            #         temb_channels=time_embed_dim,
+            #         resnet_eps=norm_eps,
+            #         resnet_act_fn=act_fn,
+            #         output_scale_factor=mid_block_scale_factor,
+            #         resnet_time_scale_shift=resnet_time_scale_shift,
+            #         cross_attention_dim=cross_attention_dim,
+            #         num_attention_heads=attention_head_dim[-1],
+            #         resnet_groups=norm_num_groups,
+            #         use_linear_projection=use_linear_projection,
+            #         upcast_attention=upcast_attention,
+            #         back_attention=back_attention
+            #     )
+            self.mid_block=DTB_UNetMidBlock2DCrossAttn(
+                in_channels=mid_block_channel,
+                temb_channels=time_embed_dim,
+                resnet_eps=norm_eps,
+                resnet_act_fn=act_fn,
+                output_scale_factor=mid_block_scale_factor,
+                resnet_time_scale_shift=resnet_time_scale_shift,
+                cross_attention_dim=cross_attention_dim,
+                num_attention_heads=attention_head_dim[-1],
+                resnet_groups=norm_num_groups,
+                use_linear_projection=use_linear_projection,
+                upcast_attention=upcast_attention,
+            )
 
     
 

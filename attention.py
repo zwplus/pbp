@@ -346,7 +346,6 @@ class BasicTransformerBlock_back(nn.Module):
                 upcast_attention=upcast_attention,
             )  # is self-attn if encoder_hidden_states is none
 
-  
             self.attn3 = Attention(
                     query_dim=dim,
                     cross_attention_dim=cross_attention_dim if not double_self_attention else None,

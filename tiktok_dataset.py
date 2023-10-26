@@ -85,7 +85,7 @@ class diffusion_dataset(Dataset):
                                 [0.26862954, 0.26130258, 0.27577711]),
         ])
 
-        self.transformer_clip=CLIPImageProcessor.from_pretrained('/root/data1/github/pbp/sd-image-variations-diffusers/feature_extract')
+        self.transformer_clip=CLIPImageProcessor.from_pretrained('/home/user/zwplus/pbp/sd-image-variations-diffusers/feature_extract')
 
     def __len__(self,):
         return len(self.data_pairs)

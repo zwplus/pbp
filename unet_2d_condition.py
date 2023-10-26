@@ -26,13 +26,16 @@ from diffusers.models.embeddings import GaussianFourierProjection, TimestepEmbed
 from diffusers.models.modeling_utils import ModelMixin
 from unet_2d_blocks import (
     CrossAttnDownBlock2D,
-    Dual_CrossAttnDownBlock2D,
+    DTB_CrossAttnUpBlock2D,
     CrossAttnUpBlock2D,
     Dual_CrossAttnUpBlock2D,
     DownBlock2D,
     UNetMidBlock2DCrossAttn,
     UNetMidBlock2DSimpleCrossAttn,
     Dual_UNetMidBlock2DCrossAttn,
+    DTB_UNetMidBlock2DCrossAttn,
+    DTB_CrossAttnDownBlock2D,
+    Dual_CrossAttnDownBlock2D,
     UpBlock2D,
     get_down_block,
     get_up_block,
@@ -152,7 +155,6 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         conv_in_kernel: int = 3,
         conv_out_kernel: int = 3,
         projection_class_embeddings_input_dim: Optional[int] = None,
-
         back_attention:Optional[bool]=False
     ):
         super().__init__()
@@ -319,6 +321,21 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 use_linear_projection=use_linear_projection,
                 upcast_attention=upcast_attention,
                 back_attention=back_attention
+            )
+        elif mid_block_type == 'DTB_UNetMidBlock2DCrossAttn':
+            self.mid_block=DTB_UNetMidBlock2DCrossAttn(
+                in_channels=block_out_channels[-1],
+                temb_channels=time_embed_dim,
+                resnet_eps=norm_eps,
+                resnet_act_fn=act_fn,
+                output_scale_factor=mid_block_scale_factor,
+                resnet_time_scale_shift=resnet_time_scale_shift,
+                cross_attention_dim=cross_attention_dim,  
+                num_attention_heads=attention_head_dim[i],
+                resnet_groups=norm_num_groups,
+                dual_cross_attention=dual_cross_attention,
+                use_linear_projection=use_linear_projection,
+                upcast_attention=upcast_attention,
             )
         elif mid_block_type is None:
             self.mid_block = None
@@ -505,7 +522,8 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             fn_recursive_set_attention_slice(module, reversed_slice_size)
 
     def _set_gradient_checkpointing(self, module, value=False):
-        if isinstance(module, (CrossAttnDownBlock2D, DownBlock2D, CrossAttnUpBlock2D, UpBlock2D,Dual_CrossAttnDownBlock2D,Dual_CrossAttnUpBlock2D)):
+        if isinstance(module, (CrossAttnDownBlock2D, DownBlock2D, CrossAttnUpBlock2D, 
+                            UpBlock2D,Dual_CrossAttnDownBlock2D,Dual_CrossAttnUpBlock2D,DTB_CrossAttnDownBlock2D,DTB_CrossAttnUpBlock2D)):
             module.gradient_checkpointing = value
 
     def forward(

@@ -59,12 +59,9 @@ class clip_transformer_block(nn.Module):
         self.proj_in=nn.Linear(inchannels,inner_dim)
 
         self.norm_1=nn.LayerNorm(inner_dim)
-        self.attn1=xformers_LinearCrossAttention(inner_dim,heads=heads_num,dim_head=head_dim)
-
-        self.norm_2=nn.LayerNorm(inner_dim)
-        self.attn2=xformers_LinearCrossAttention(query_dim=inner_dim,context_dim=cross_dim,heads=heads_num,dim_head=head_dim)
+        self.attn1=xformers_LinearCrossAttention(query_dim=inner_dim,context_dim=cross_dim,heads=heads_num,dim_head=head_dim)
         
-        self.norm_3=nn.LayerNorm(inner_dim)
+        self.norm_2=nn.LayerNorm(inner_dim)
         self.feedforward=FeedFoward(inner_dim,mult=mult)
 
         self.norm_out=nn.LayerNorm(inner_dim)
@@ -72,24 +69,21 @@ class clip_transformer_block(nn.Module):
     
     def forward(self,part_feature:torch.FloatTensor,full_feature:torch.FloatTensor=None):
         
+        res=part_feature
         part_feature=self.norm_in(part_feature)
         part_feature=self.proj_in(part_feature)
 
         part_feature=self.norm_1(part_feature)
         residual=part_feature
-        part_feature=self.attn1(part_feature)
+        part_feature=self.attn1(part_feature,full_feature)
         part_feature+=residual
 
         part_feature=self.norm_2(part_feature)
-        residual=part_feature
-        part_feature=self.attn2(part_feature,full_feature)
-        part_feature+=residual
-
-        part_feature=self.norm_3(part_feature)
         part_feature=self.feedforward(part_feature)
 
+
         part_feature=self.norm_out(part_feature)
-        part_feature=self.proj_out(part_feature)
+        part_feature=self.proj_out(part_feature)+res
 
         return part_feature
 

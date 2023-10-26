@@ -26,11 +26,11 @@ from diffusers.utils.import_utils import is_xformers_available
 
 from unet_2d_condition import UNet2DConditionModel as unet
 from style_encoder import (
-     CLIP_Image_Extractor,
-     CLIP_Proj,
-     people_global_fusion,
-     people_local_fusion,
-     clip_transformer_block
+    CLIP_Image_Extractor,
+    CLIP_Proj,
+    people_global_fusion,
+    people_local_fusion,
+    clip_transformer_block
 )
 
 from tiktok_dataset import diffusion_dataset
@@ -87,7 +87,7 @@ class People_Background(pl.LightningModule):
         self.people_proj_part=CLIP_Proj(**people_config['clip_proj'])
         self.people_global_fusion=clip_transformer_block(**people_config['global_fusion'])
         self.people_local_fusion=clip_transformer_block(**people_config['local_fusion'])
- 
+
 
         
         #初始化background_config
@@ -282,7 +282,7 @@ class People_Background(pl.LightningModule):
                             +list(self.controlnet_pose.parameters() ))
                     if i.requires_grad==True ]
         optim = torch.optim.AdamW(params, lr=self.lr)
-        lambda_lr=lambda step: max((self.global_step)/self.warm_up,1e-4) if (self.global_step)< self.warm_up else max((70000-self.global_step)/(70000-self.warm_up),1e-3)
+        lambda_lr=lambda step: max((self.global_step)/self.warm_up,1e-2) if (self.global_step)< self.warm_up else max((70000-self.global_step)/(70000-self.warm_up),1e-3)
         lr_scheduler=torch.optim.lr_scheduler.LambdaLR(optim,lambda_lr)
         return {'optimizer':optim,'lr_scheduler':{"scheduler":lr_scheduler,'monitor':'fid','interval':'step','frequency':1}}
 
@@ -299,34 +299,34 @@ class People_Background(pl.LightningModule):
 
 
 train_list=[
-    '/root/data2/user/zhangwei/Data/Human_Attribute_Pretrain/TikTokDance/train/titok_pairs.txt',
+    '/data/zwplus/tiktok/train/titok_pairs.txt',
 ]
 test_list=[
-   '/root/data2/user/zhangwei/Data/Human_Attribute_Pretrain/TikTokDance/test/titok_pairs.txt'
+    '/data/zwplus/tiktok/test/titok_pairs.txt'
 ]
 
 
 
 if __name__=='__main__':
-    logger=TensorBoardLogger(save_dir='/root/data1/github/pbp/log/')
+    logger=TensorBoardLogger(save_dir='/home/user/zwplus/pbp/log')
     train_dataset=diffusion_dataset(train_list,if_train=True)
     test_dataset=diffusion_dataset(test_list,if_train=False)
 
-    train_loader=DataLoader(train_dataset,batch_size=12,shuffle=True,pin_memory=True,num_workers=12)
-    val_loader=DataLoader(test_dataset,batch_size=12,pin_memory=True,num_workers=12,drop_last=True,shuffle=False)
+    train_loader=DataLoader(train_dataset,batch_size=32,shuffle=True,pin_memory=True,num_workers=54)
+    val_loader=DataLoader(test_dataset,batch_size=32,pin_memory=True,num_workers=54,drop_last=True,shuffle=False)
     
     unet_config={
-        'ck_path':'/root/data1/github/pbp/sd-image-variations-diffusers/dual_unet/',
+        'ck_path':'/home/user/zwplus/pbp/sd-image-variations-diffusers/dtb_unet',
     }
     people_config={
         'clip_image_extractor':
             {
-                'clip_path':'/root/data1/github/pbp/sd-image-variations-diffusers/image_encoder'
+                'clip_path':'/home/user/zwplus/pbp/sd-image-variations-diffusers/image_encoder'
             },
         'clip_proj':{
             'in_channel':1024,
             'out_channel':768,
-            'ck_path':'/root/data1/github/pbp/sd-image-variations-diffusers/raw_proj/pro_j.ckpt'
+            'ck_path':'/home/user/zwplus/pbp/sd-image-variations-diffusers/raw_proj/pro_j.ckpt'
         },
         'global_fusion':{
             'inchannels':768,   
@@ -348,26 +348,26 @@ if __name__=='__main__':
         'clip_proj':{
             'in_channel':1024,
             'out_channel':768,
-            'ck_path':'/root/data1/github/pbp/sd-image-variations-diffusers/raw_proj/pro_j.ckpt'
+            'ck_path':'/home/user/zwplus/pbp/sd-image-variations-diffusers/raw_proj/pro_j.ckpt'
         }
     }
 
-    vae_path='/root/data1/github/pbp/sd-image-variations-diffusers/vae_2/'
-    logger=TensorBoardLogger(save_dir='/root/data1/github/pbp/')
+    vae_path='/home/user/zwplus/pbp/sd-image-variations-diffusers/vae'
+    logger=TensorBoardLogger(save_dir='/home/user/zwplus/pbp/')
 
     model=People_Background(unet_config,people_config,background_config,vae_path=vae_path,
-                            train_stage='train',out_path='/root/data1/github/pbp/ouput',
-                            warm_up=8000,learning_rate=2e-4)
+                            train_stage='train',out_path='/home/user/zwplus/pbp/output',
+                            warm_up=10000,learning_rate=6e-5)
 
 
-    checkpoint_callback = pl.callbacks.ModelCheckpoint(dirpath="/root/data1/github/pbp/checkpoint", save_top_k=5, monitor="fid",mode='min',filename="pndm-{epoch:03d}-{fid:.3f}")
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(dirpath="/home/user/zwplus/pbp/checkpoint", save_top_k=4, monitor="fid",mode='min',filename="{epoch:03d}-{fid:.3f}-{ssim:.3f}")
     
     trainer=pl.Trainer(
-        logger=logger,callbacks=[checkpoint_callback],default_root_dir='/root/data1/github/pbp/checkpoint',
+        logger=logger,callbacks=[checkpoint_callback],default_root_dir='/home/user/zwplus/pbp/checkpoint',
         strategy='deepspeed_stage_2',precision='16-mixed',
-        accelerator='gpu',devices=4,
+        accelerator='gpu',devices=2,
         accumulate_grad_batches=8,check_val_every_n_epoch=5,
-        log_every_n_steps=1000,max_epochs=200,
+        log_every_n_steps=2000,max_epochs=200,
         profiler='simple',benchmark=True,gradient_clip_val=1) 
     
     trainer.fit(model,train_loader,val_loader) 
