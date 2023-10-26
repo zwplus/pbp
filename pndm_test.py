@@ -153,7 +153,7 @@ class People_Background(pl.LightningModule):
         
         model_out = self(noisy_image, timesteps,people_feature,back_feature,pose_img)
 
-        loss=F.mse_loss(model_out,noise)
+        loss=F.l1_loss(model_out,noise)
 
         self.log('train_loss',loss, prog_bar=True,
                     logger=True, on_step=True, on_epoch=True,sync_dist=True)
@@ -190,7 +190,7 @@ class People_Background(pl.LightningModule):
             people_feature=torch.cat([cond_people_feature,uncond_people_feature])
 
             uncond_back_feature=self.get_back_feature(torch.zeros_like(background_img).to(self.dtype).to(self.device))
-            cond_back_feature=self.get_back_feature(background_img).detach()
+            cond_back_feature=self.get_back_feature(background_img)
             back_feature=torch.cat([cond_back_feature,uncond_back_feature])
             
             pose_img=torch.cat([pose_img,pose_img])
@@ -312,8 +312,8 @@ if __name__=='__main__':
     train_dataset=diffusion_dataset(train_list,if_train=True)
     test_dataset=diffusion_dataset(test_list,if_train=False)
 
-    train_loader=DataLoader(train_dataset,batch_size=32,shuffle=True,pin_memory=True,num_workers=54)
-    val_loader=DataLoader(test_dataset,batch_size=32,pin_memory=True,num_workers=54,drop_last=True,shuffle=False)
+    train_loader=DataLoader(train_dataset,batch_size=24,shuffle=True,pin_memory=True,num_workers=36)
+    val_loader=DataLoader(test_dataset,batch_size=24,pin_memory=True,num_workers=36,drop_last=True,shuffle=False)
     
     unet_config={
         'ck_path':'/home/user/zwplus/pbp/sd-image-variations-diffusers/dtb_unet',
@@ -356,18 +356,18 @@ if __name__=='__main__':
     logger=TensorBoardLogger(save_dir='/home/user/zwplus/pbp/')
 
     model=People_Background(unet_config,people_config,background_config,vae_path=vae_path,
-                            train_stage='train',out_path='/home/user/zwplus/pbp/output',
-                            warm_up=10000,learning_rate=6e-5)
+                            train_stage='pre',out_path='/home/user/zwplus/pbp/output',
+                            warm_up=10000,learning_rate=1e-4)
 
 
     checkpoint_callback = pl.callbacks.ModelCheckpoint(dirpath="/home/user/zwplus/pbp/checkpoint", save_top_k=4, monitor="fid",mode='min',filename="{epoch:03d}-{fid:.3f}-{ssim:.3f}")
     
     trainer=pl.Trainer(
         logger=logger,callbacks=[checkpoint_callback],default_root_dir='/home/user/zwplus/pbp/checkpoint',
-        strategy='deepspeed_stage_2',precision='16-mixed',
+        strategy='DDP',precision='16-mixed',
         accelerator='gpu',devices=2,
-        accumulate_grad_batches=8,check_val_every_n_epoch=5,
-        log_every_n_steps=2000,max_epochs=200,
+        accumulate_grad_batches=8,check_val_every_n_epoch=8,
+        log_every_n_steps=200,max_epochs=200,
         profiler='simple',benchmark=True,gradient_clip_val=1) 
     
     trainer.fit(model,train_loader,val_loader) 

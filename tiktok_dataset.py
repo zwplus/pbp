@@ -131,8 +131,5 @@ class diffusion_dataset(Dataset):
             ref_local_img=torch.cat(ref_local_img,dim=0)
         except Exception as e:
             traceback.print_exc()
-        #     print(e)
-        #     print(self.data_pairs[index])
-
 
         return back,ref_local_img,people,pose,raw

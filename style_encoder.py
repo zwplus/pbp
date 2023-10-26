@@ -89,7 +89,6 @@ class clip_transformer_block(nn.Module):
 
 
 
-
 class people_global_fusion(nn.Module):
     def __init__(self,inchannels=512,ch=768,local_num=8,heads=8) -> None:
         super().__init__()
