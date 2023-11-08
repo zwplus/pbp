@@ -25,7 +25,7 @@ class CLIP_Proj(nn.Module):
     def __init__(self,in_channel:int,out_channel:int,ck_path:str=None) -> None:
         super().__init__()
         self.refer_proj=nn.Linear(in_channel,out_channel,bias=False)
-        self.refer_proj.load_state_dict(torch.load(ck_path))
+        # self.refer_proj.load_state_dict(torch.load(ck_path))
     
     def forward(self,last_hidden_states_norm,num_images_per_prompt=1):
         image_embeddings = self.refer_proj(last_hidden_states_norm)
@@ -163,3 +163,22 @@ class people_local_fusion(nn.Module):
 
         return out+resdiual
 
+if __name__ == '__main__':
+    net=people_global_fusion()
+    
+    x=torch.randn((1,1,1024))
+    t=torch.randn((1,1,768))
+    from torch.optim import AdamW
+    opt=AdamW(list(net.parameters()),lr=0.0001)
+
+
+
+    opt.zero_grad()
+
+    p=net(x)
+    loss=torch.nn.functional.l1_loss(p,t)
+    loss.backward()
+    for name, param in net.named_parameters():
+        if param.grad is None:
+            print(name)
+    opt.step()

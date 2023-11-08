@@ -23,8 +23,8 @@ from torchmetrics.image import PeakSignalNoiseRatio as PSNR
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPIPS
 from diffusers import AutoencoderKL,PNDMScheduler,DDIMScheduler,DDPMScheduler
 from diffusers.utils.import_utils import is_xformers_available
-
-from unet_2d_condition import UNet2DConditionModel as unet
+import wandb
+from unet_2d_condition import UNet2DConditionModel as Unet
 from style_encoder import (
     CLIP_Image_Extractor,
     CLIP_Proj,
@@ -35,6 +35,7 @@ from style_encoder import (
 
 from tiktok_dataset import diffusion_dataset
 from control_net import ControlNetModel
+from pytorch_lightning.loggers import WandbLogger
 
 seed_everything(1024)
 
@@ -46,14 +47,15 @@ class People_Background(pl.LightningModule):
                 vae_path:str=None,
                 train_stage:str='people',out_path='',
                 image_size=(4,32,32),condition_rate=0.1,condition_guidance=3,
-                warm_up=6000,learning_rate=1e-4,local_num=8,enable_xformers_memory_efficient_attention=True):
+                warm_up=8000,learning_rate=1e-4,local_num=8,enable_xformers_memory_efficient_attention=True,
+                batch_size=32):
         super().__init__()
 
         self.save_hyperparameters()
 
         self.train_stage=train_stage
-        self.train_scheduler=DDPMScheduler()
-        self.val_scheduler=DDIMScheduler()
+        self.train_scheduler=DDPMScheduler.from_pretrained('/home/user/zwplus/pbp/sd-image-variations-diffusers/scheduler')
+        self.val_scheduler=DDIMScheduler.from_pretrained('/home/user/zwplus/pbp/sd-image-variations-diffusers/scheduler')
         self.val_scheduler.set_timesteps(50)
 
         self.condition_rate=condition_rate
@@ -70,15 +72,13 @@ class People_Background(pl.LightningModule):
 
 
         self.init_model(unet_config,people_config,background_config,vae_path,train_stage,enable_xformers_memory_efficient_attention)
+        print(self.unet.dtype)
 
     def init_model(self,unet_config,people_config,background_config:Optional[Dict]=None,vae_path:str=None,train_stage:str=None,
                 enable_xformers_memory_efficient_attention:bool=True,gradient_checkpointing=True):
         self.laten_model=AutoencoderKL.from_pretrained(vae_path)
         self.laten_model.eval()
         self.laten_model.requires_grad_(False)
-
-        
-
         self.clip=CLIP_Image_Extractor(**people_config['clip_image_extractor'])
         self.clip.eval()
         self.clip.requires_grad_(False)
@@ -87,14 +87,31 @@ class People_Background(pl.LightningModule):
         self.people_proj_part=CLIP_Proj(**people_config['clip_proj'])
         self.people_global_fusion=clip_transformer_block(**people_config['global_fusion'])
         self.people_local_fusion=clip_transformer_block(**people_config['local_fusion'])
-
-
-        
-        #初始化background_config
         self.back_proj=CLIP_Proj(**background_config['clip_proj'])
 
-        self.unet=unet.from_pretrained(unet_config['ck_path'])
+        self.unet=Unet.from_pretrained(unet_config['ck_path'])
         self.controlnet_pose = ControlNetModel.from_unet(unet=self.unet)
+
+        unet=torch.load('/home/user/zwplus/pbp/sd-image-variations-diffusers/test/unet.bin',map_location='cpu')
+        self.unet.load_state_dict(unet)
+
+        people_proj=torch.load('/home/user/zwplus/pbp/sd-image-variations-diffusers/test/people_proj.bin',map_location='cpu')
+        self.people_proj.load_state_dict(people_proj)
+
+        people_proj_part=torch.load('/home/user/zwplus/pbp/sd-image-variations-diffusers/test/people_proj_part.bin',map_location='cpu')
+        self.people_proj_part.load_state_dict(people_proj_part)
+
+        people_global=torch.load('/home/user/zwplus/pbp/sd-image-variations-diffusers/test/people_global_fusion.bin',map_location='cpu')
+        self.people_global_fusion.load_state_dict(people_global)
+
+        people_local=torch.load('/home/user/zwplus/pbp/sd-image-variations-diffusers/test/people_local_fusion.bin',map_location='cpu')
+        self.people_local_fusion.load_state_dict(people_local)
+
+        back_proj=torch.load('/home/user/zwplus/pbp/sd-image-variations-diffusers/test/back_proj.bin',map_location='cpu')
+        self.back_proj.load_state_dict(back_proj)
+
+        control_net=torch.load('/home/user/zwplus/pbp/sd-image-variations-diffusers/test/control.bin',map_location='cpu')
+        self.controlnet_pose.load_state_dict(control_net)
 
         need_train=0
         if train_stage=='pre':
@@ -134,6 +151,8 @@ class People_Background(pl.LightningModule):
         part_img=part_img.to(self.dtype).to(self.device)
         background_img=background_img.to(self.dtype).to(self.device)
         pose_img=pose_img.to(self.dtype).to(self.device)
+
+
             
 
         if rate <= self.condition_rate:
@@ -153,7 +172,7 @@ class People_Background(pl.LightningModule):
         
         model_out = self(noisy_image, timesteps,people_feature,back_feature,pose_img)
 
-        loss=F.l1_loss(model_out,noise)
+        loss=F.mse_loss(model_out,noise)
 
         self.log('train_loss',loss, prog_bar=True,
                     logger=True, on_step=True, on_epoch=True,sync_dist=True)
@@ -249,9 +268,9 @@ class People_Background(pl.LightningModule):
             if self.save_img_num==1:  
                 h=torch.cat([img[:4],pose_img[:4],target_img[:4]])
                 show_img=make_grid(h,nrow=4,padding=1)
-                show_img=torch.unsqueeze(show_img,dim=0)
-                logger.experiment.add_images('val/img',show_img,self.global_step)
+                show_img=self.tr(show_img)
 
+                logger.log_image(f'val/image',images=[show_img],step=self.global_step)
     def get_people_condition(self,people_img,part_img):
         part_img=rearrange(part_img,'b (l c) h w -> (b l) c h w',c=3).contiguous()
         # part_laten=self.laten_model.encoder.get_feature(part_img).detach()
@@ -282,7 +301,7 @@ class People_Background(pl.LightningModule):
                             +list(self.controlnet_pose.parameters() ))
                     if i.requires_grad==True ]
         optim = torch.optim.AdamW(params, lr=self.lr)
-        lambda_lr=lambda step: max((self.global_step)/self.warm_up,1e-2) if (self.global_step)< self.warm_up else max((70000-self.global_step)/(70000-self.warm_up),1e-3)
+        lambda_lr=lambda step: max((self.global_step)/self.warm_up,1e-2) if (self.global_step)< self.warm_up else max((200000-self.global_step)/(200000-self.warm_up),1e-3)
         lr_scheduler=torch.optim.lr_scheduler.LambdaLR(optim,lambda_lr)
         return {'optimizer':optim,'lr_scheduler':{"scheduler":lr_scheduler,'monitor':'fid','interval':'step','frequency':1}}
 
@@ -308,12 +327,11 @@ test_list=[
 
 
 if __name__=='__main__':
-    logger=TensorBoardLogger(save_dir='/home/user/zwplus/pbp/log')
     train_dataset=diffusion_dataset(train_list,if_train=True)
     test_dataset=diffusion_dataset(test_list,if_train=False)
 
-    train_loader=DataLoader(train_dataset,batch_size=24,shuffle=True,pin_memory=True,num_workers=36)
-    val_loader=DataLoader(test_dataset,batch_size=24,pin_memory=True,num_workers=36,drop_last=True,shuffle=False)
+    train_loader=DataLoader(train_dataset,batch_size=32,shuffle=True,pin_memory=True,num_workers=32)
+    val_loader=DataLoader(test_dataset,batch_size=32,pin_memory=True,num_workers=32,drop_last=True,shuffle=False)
     
     unet_config={
         'ck_path':'/home/user/zwplus/pbp/sd-image-variations-diffusers/dtb_unet',
@@ -353,22 +371,27 @@ if __name__=='__main__':
     }
 
     vae_path='/home/user/zwplus/pbp/sd-image-variations-diffusers/vae'
-    logger=TensorBoardLogger(save_dir='/home/user/zwplus/pbp/')
+
+    logger=WandbLogger(save_dir='/home/user/zwplus/pbp/',project='pose_transfer_pbp')
+
+    
 
     model=People_Background(unet_config,people_config,background_config,vae_path=vae_path,
-                            train_stage='pre',out_path='/home/user/zwplus/pbp/output',
-                            warm_up=10000,learning_rate=1e-4)
+                            train_stage='train',out_path='/home/user/zwplus/pbp/output',
+                            warm_up=12000,learning_rate=1e-4)
+    logger.watch(model)
 
-
-    checkpoint_callback = pl.callbacks.ModelCheckpoint(dirpath="/home/user/zwplus/pbp/checkpoint", save_top_k=4, monitor="fid",mode='min',filename="{epoch:03d}-{fid:.3f}-{ssim:.3f}")
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(dirpath="/home/user/zwplus/pbp/checkpoint", save_top_k=3, monitor="fid",mode='min',filename="{epoch:03d}-{fid:.3f}-{ssim:.3f}")
     
     trainer=pl.Trainer(
         logger=logger,callbacks=[checkpoint_callback],default_root_dir='/home/user/zwplus/pbp/checkpoint',
-        strategy='DDP',precision='16-mixed',
+        strategy=DDPStrategy(find_unused_parameters=True),precision='16-mixed',
         accelerator='gpu',devices=2,
-        accumulate_grad_batches=8,check_val_every_n_epoch=8,
-        log_every_n_steps=200,max_epochs=200,
+        accumulate_grad_batches=10,check_val_every_n_epoch=4,
+        log_every_n_steps=200,max_epochs=400,
         profiler='simple',benchmark=True,gradient_clip_val=1) 
     
     trainer.fit(model,train_loader,val_loader) 
+
+    wandb.finish()
 

@@ -9,3 +9,5 @@
 *.txt
 /output
 *.jpg
+*.png
+/wandb
